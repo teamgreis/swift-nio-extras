@@ -40,17 +40,6 @@ final class BodyCollector: ChannelInboundHandler {
     }
 }
 
-/// Captures errors fired by the handler (inbound errors travel towards the head of the pipeline).
-final class ErrorCollector: ChannelInboundHandler {
-    typealias InboundIn = HTTPRequestPart
-
-    var error: Error?
-
-    func errorCaught(context: ChannelHandlerContext, error: Error) {
-        self.error = error
-    }
-}
-
 final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     private func makeRequest(
         method: HTTPRequest.Method = .post,
@@ -69,20 +58,19 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         return request
     }
 
-    /// Pipeline: ErrorCollector (head side) -> limit handler -> BodyCollector (tail side).
+    /// Pipeline: limit handler -> BodyCollector (tail side). Errors fired by the
+    /// handler surface via `EmbeddedChannel.writeInbound` (NIO test convention).
     private func makeChannel(
         limit: Int,
         overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .contentTooLarge)
-    ) throws -> (EmbeddedChannel, ErrorCollector, BodyCollector) {
+    ) throws -> (EmbeddedChannel, BodyCollector) {
         let channel = EmbeddedChannel()
-        let errorCollector = ErrorCollector()
         let bodyCollector = BodyCollector()
-        try channel.pipeline.syncOperations.addHandler(errorCollector)
         try channel.pipeline.syncOperations.addHandler(
             NIOHTTPRequestBodySizeLimitHandler(limit: limit, overflowAction: overflowAction)
         )
         try channel.pipeline.syncOperations.addHandler(bodyCollector)
-        return (channel, errorCollector, bodyCollector)
+        return (channel, bodyCollector)
     }
 
     private func readAllOutboundResponses(_ channel: EmbeddedChannel) throws -> [HTTPResponsePart] {
@@ -96,7 +84,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     // MARK: - Happy paths
 
     func testBodyWithinLimitIsForwarded() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "10")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
@@ -104,23 +92,21 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
 
         XCTAssertEqual(bodyCollector.receivedBytes, 10)
         XCTAssertTrue(bodyCollector.ended)
-        XCTAssertNil(errorCollector.error)
         XCTAssertNil(try channel.readOutbound(as: HTTPResponsePart.self))
     }
 
     func testBodyExactlyAtLimitIsForwarded() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest()))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "0123456789")))
         try channel.writeInbound(HTTPRequestPart.end(nil))
 
         XCTAssertEqual(bodyCollector.receivedBytes, 10)
         XCTAssertTrue(bodyCollector.ended)
-        XCTAssertNil(errorCollector.error)
     }
 
     func testEmptyRequestBodyIsForwarded() throws {
-        let (channel, _, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(method: .get)))
         try channel.writeInbound(HTTPRequestPart.end(nil))
 
@@ -129,13 +115,12 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     }
 
     func testZeroLimitRejectsAnyBody() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 0)
+        let (channel, bodyCollector) = try makeChannel(limit: 0)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "0")))
         try channel.writeInbound(HTTPRequestPart.end(nil))
 
         XCTAssertEqual(bodyCollector.receivedBytes, 0)
         XCTAssertTrue(bodyCollector.ended)
-        XCTAssertNil(errorCollector.error)
 
         // Any body on the next (pipelined) request is rejected.
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "1")))
@@ -151,7 +136,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     // MARK: - Header layer violations
 
     func testDeclaredContentLengthExceedingLimitRejectsImmediately() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "11")))
 
         // The reject response must be written before any body bytes arrive.
@@ -165,12 +150,11 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
 
         // Nothing from the offending request is forwarded to the application.
         XCTAssertEqual(bodyCollector.receivedBytes, 0)
-        XCTAssertNil(errorCollector.error)
         XCTAssertFalse(channel.isActive)
     }
 
     func testMalformedContentLengthFallsBackToStreamingCheck() throws {
-        let (channel, _, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "not-a-number")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "0123456789")))
         try channel.writeInbound(HTTPRequestPart.end(nil))
@@ -182,13 +166,12 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     // MARK: - Streaming layer violations
 
     func testStreamedBodyExceedingLimitIsRejected() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
 
         try channel.writeInbound(HTTPRequestPart.head(makeRequest()))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
         XCTAssertEqual(bodyCollector.receivedBytes, 10)
-        XCTAssertNil(errorCollector.error)
 
         // The 11th byte trips the limit: this frame must not reach the application.
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "!")))
@@ -211,7 +194,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         // A declared content-length that is too small does not protect the client:
         // actual bytes are still counted while streaming. The header check passes,
         // the streaming check trips one frame later.
-        let (channel, _, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "4")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
@@ -230,52 +213,58 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     // MARK: - `.fail` action
 
     func testFailActionFiresErrorAndLeavesResponseToApplication() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(
+        let (channel, bodyCollector) = try makeChannel(
             limit: 10,
             overflowAction: .fail
         )
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(path: "/big-upload")))
-        try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "0123456789A")))
 
-        // No HTTP response is written by the handler itself.
-        XCTAssertNil(try channel.readOutbound(as: HTTPResponsePart.self))
-
-        guard let error = errorCollector.error as? NIOHTTPBodyLimitOverflowError else {
-            XCTFail("expected NIOHTTPBodyLimitOverflowError, got \(String(describing: errorCollector.error))")
-            return
+        // The error surfaces through the pipeline: EmbeddedChannel re-throws errors
+        // that reach its head, so a server application can observe it in its own
+        // errorCaught handler.
+        XCTAssertThrowsError(
+            try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "0123456789A")))
+        ) { error in
+            guard let overflow = error as? NIOHTTPBodyLimitOverflowError else {
+                XCTFail("expected NIOHTTPBodyLimitOverflowError, got \(error)")
+                return
+            }
+            XCTAssertEqual(overflow.method, .post)
+            XCTAssertEqual(overflow.path, "/big-upload")
+            XCTAssertEqual(overflow.limit, 10)
+            XCTAssertEqual(overflow.received, 11)
         }
-        XCTAssertEqual(error.method, .post)
-        XCTAssertEqual(error.path, "/big-upload")
-        XCTAssertEqual(error.limit, 10)
-        XCTAssertEqual(error.received, 11)
 
+        // No HTTP response is written by the handler itself, and the body was not forwarded.
+        XCTAssertNil(try channel.readOutbound(as: HTTPResponsePart.self))
         XCTAssertEqual(bodyCollector.receivedBytes, 0)
         XCTAssertFalse(channel.isActive)
     }
 
     func testFailActionHeaderViolationCarriesDeclaredLength() throws {
-        let (channel, errorCollector, _) = try makeChannel(limit: 10, overflowAction: .fail)
-        try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "1024")))
-
-        guard let error = errorCollector.error as? NIOHTTPBodyLimitOverflowError else {
-            XCTFail("expected NIOHTTPBodyLimitOverflowError, got \(String(describing: errorCollector.error))")
-            return
+        let (channel, _) = try makeChannel(limit: 10, overflowAction: .fail)
+        XCTAssertThrowsError(
+            try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "1024")))
+        ) { error in
+            guard let overflow = error as? NIOHTTPBodyLimitOverflowError else {
+                XCTFail("expected NIOHTTPBodyLimitOverflowError, got \(error)")
+                return
+            }
+            XCTAssertEqual(overflow.received, 1024)
+            XCTAssertEqual(overflow.limit, 10)
         }
-        XCTAssertEqual(error.received, 1024)
-        XCTAssertEqual(error.limit, 10)
     }
 
     // MARK: - Pipelining
 
     func testPipelinedRequestsAreHandledIndependently() throws {
-        let (channel, errorCollector, bodyCollector) = try makeChannel(limit: 10)
+        let (channel, bodyCollector) = try makeChannel(limit: 10)
 
         // First request: within limit, fully forwarded.
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(path: "/first")))
         try channel.writeInbound(HTTPRequestPart.body(ByteBuffer(string: "Hello")))
         try channel.writeInbound(HTTPRequestPart.end(nil))
         XCTAssertEqual(bodyCollector.receivedBytes, 5)
-        XCTAssertNil(errorCollector.error)
 
         // Second request: violates the limit; the connection is then closed.
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(path: "/second", contentLength: "99")))

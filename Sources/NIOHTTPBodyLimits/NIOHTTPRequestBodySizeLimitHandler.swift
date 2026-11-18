@@ -153,3 +153,6 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
         }
     }
 }
+
+@available(*, unavailable)
+extension NIOHTTPRequestBodySizeLimitHandler: Sendable {}

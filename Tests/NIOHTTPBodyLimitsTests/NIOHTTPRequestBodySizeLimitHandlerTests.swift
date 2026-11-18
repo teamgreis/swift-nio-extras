@@ -40,6 +40,9 @@ final class BodyCollector: ChannelInboundHandler {
     }
 }
 
+@available(*, unavailable)
+extension BodyCollector: Sendable {}
+
 /// Captures errors fired by the handler (inbound errors travel towards the head of the pipeline).
 final class ErrorCollector: ChannelInboundHandler {
     typealias InboundIn = HTTPRequestPart
@@ -50,6 +53,9 @@ final class ErrorCollector: ChannelInboundHandler {
         self.error = error
     }
 }
+
+@available(*, unavailable)
+extension ErrorCollector: Sendable {}
 
 final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     private func makeRequest(

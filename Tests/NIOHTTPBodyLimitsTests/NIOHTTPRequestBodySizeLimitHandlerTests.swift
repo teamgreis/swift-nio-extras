@@ -40,9 +40,6 @@ final class BodyCollector: ChannelInboundHandler {
     }
 }
 
-@available(*, unavailable)
-extension BodyCollector: Sendable {}
-
 /// Captures errors fired by the handler (inbound errors travel towards the head of the pipeline).
 final class ErrorCollector: ChannelInboundHandler {
     typealias InboundIn = HTTPRequestPart
@@ -53,9 +50,6 @@ final class ErrorCollector: ChannelInboundHandler {
         self.error = error
     }
 }
-
-@available(*, unavailable)
-extension ErrorCollector: Sendable {}
 
 final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     private func makeRequest(
@@ -83,11 +77,11 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let channel = EmbeddedChannel()
         let errorCollector = ErrorCollector()
         let bodyCollector = BodyCollector()
-        try channel.pipeline.addHandler(errorCollector).wait()
-        try channel.pipeline.addHandler(
+        try channel.pipeline.syncOperations.addHandler(errorCollector).wait()
+        try channel.pipeline.syncOperations.addHandler(
             NIOHTTPRequestBodySizeLimitHandler(limit: limit, overflowAction: overflowAction)
         ).wait()
-        try channel.pipeline.addHandler(bodyCollector).wait()
+        try channel.pipeline.syncOperations.addHandler(bodyCollector).wait()
         return (channel, errorCollector, bodyCollector)
     }
 

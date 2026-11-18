@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 
 import HTTPTypes
+import NIOConcurrencyHelpers
 import NIOCore
 import NIOHTTPTypes
 
@@ -54,12 +55,18 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
     private let limit: Int
     private let overflowAction: NIOHTTPBodyLimitOverflowAction
 
-    private var receivedBodyBytes = 0
-    private var didViolate = false
+    /// Per-request state. Confined to a single event loop thread in practice;
+    /// kept behind a lock so the handler is a valid `Sendable` type.
+    private struct PerRequestState {
+        var receivedBodyBytes = 0
+        var didViolate = false
 
-    // Tracked so violations discovered mid-body can produce a meaningful error.
-    private var lastMethod: HTTPRequest.Method = .get
-    private var lastPath: String = ""
+        // Tracked so violations discovered mid-body can produce a meaningful error.
+        var lastMethod: HTTPRequest.Method = .get
+        var lastPath: String = ""
+    }
+
+    private let state = NIOLockedValueBox(PerRequestState())
 
     /// Creates a new request body size limit handler.
     ///
@@ -80,54 +87,67 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
         switch part {
         case .head(let request):
             // A new request begins (this handler also supports HTTP/1.1 pipelining):
-            // reset the per-request accounting.
-            self.receivedBodyBytes = 0
-            self.didViolate = false
-            self.lastMethod = request.method
-            self.lastPath = request.path ?? ""
+            // reset the per-request accounting and arm the header-layer check.
+            let headerOverflow = self.state.withLockedValue { state -> Int? in
+                state.receivedBodyBytes = 0
+                state.didViolate = false
+                state.lastMethod = request.method
+                state.lastPath = request.path ?? ""
 
-            // Header layer: reject immediately when the declared length alone
-            // exceeds the limit. A missing or malformed header falls through to
-            // the streaming layer below.
-            if let declaredLength = Int(request.headerFields[.contentLength] ?? ""),
-                declaredLength > self.limit
-            {
-                self.onOverflow(context: context, received: declaredLength)
+                // Header layer: reject immediately when the declared length alone
+                // exceeds the limit. A missing or malformed header falls through to
+                // the streaming layer below.
+                if let declaredLength = Int(request.headerFields[.contentLength] ?? ""),
+                    declaredLength > self.limit
+                {
+                    state.didViolate = true
+                    return declaredLength
+                }
+                return nil
+            }
+
+            if let headerOverflow {
+                self.onOverflow(context: context, received: headerOverflow)
                 return
             }
 
             context.fireChannelRead(data)
 
         case .body(let buffer):
-            if self.didViolate {
-                // Already rejected: stop forwarding this request's body and
-                // discard remaining frames (no buffering, no further checks).
-                return
+            // Streaming layer: count bytes as they arrive.
+            let overflow = self.state.withLockedValue { state -> Int? in
+                if state.didViolate {
+                    // Already rejected: stop forwarding this request's body and
+                    // discard remaining frames (no buffering, no further checks).
+                    return nil
+                }
+
+                state.receivedBodyBytes += buffer.readableBytes
+                if state.receivedBodyBytes > self.limit {
+                    state.didViolate = true
+                    return state.receivedBodyBytes
+                }
+                return nil
             }
 
-            // Streaming layer: count bytes as they arrive.
-            self.receivedBodyBytes += buffer.readableBytes
-            if self.receivedBodyBytes > self.limit {
-                self.onOverflow(context: context, received: self.receivedBodyBytes)
+            if let overflow {
+                self.onOverflow(context: context, received: overflow)
                 return
             }
 
             context.fireChannelRead(data)
 
         case .end:
-            if self.didViolate {
-                // Nothing to forward for a rejected request.
-                return
+            let violated = self.state.withLockedValue { $0.didViolate }
+            if !violated {
+                context.fireChannelRead(data)
             }
-            context.fireChannelRead(data)
+            // Nothing to forward for a rejected request.
         }
     }
 
     private func onOverflow(context: ChannelHandlerContext, received: Int) {
-        if self.didViolate {
-            return
-        }
-        self.didViolate = true
+        let (method, path) = self.state.withLockedValue { ($0.lastMethod, $0.lastPath) }
 
         switch self.overflowAction {
         case .respond(let status):
@@ -143,8 +163,8 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
         case .fail:
             context.fireErrorCaught(
                 NIOHTTPBodyLimitOverflowError(
-                    method: self.lastMethod,
-                    path: self.lastPath,
+                    method: method,
+                    path: path,
                     limit: self.limit,
                     received: received
                 )
@@ -154,5 +174,4 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
     }
 }
 
-@available(*, unavailable)
 extension NIOHTTPRequestBodySizeLimitHandler: Sendable {}

@@ -138,11 +138,11 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
             context.fireChannelRead(data)
 
         case .end:
+            // Nothing is forwarded for a rejected request: send only if acceptable.
             let violated = self.state.withLockedValue { $0.didViolate }
             if !violated {
                 context.fireChannelRead(data)
             }
-            // Nothing to forward for a rejected request.
         }
     }
 

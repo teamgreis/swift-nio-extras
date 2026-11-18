@@ -77,11 +77,11 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let channel = EmbeddedChannel()
         let errorCollector = ErrorCollector()
         let bodyCollector = BodyCollector()
-        try channel.pipeline.syncOperations.addHandler(errorCollector).wait()
+        try channel.pipeline.syncOperations.addHandler(errorCollector)
         try channel.pipeline.syncOperations.addHandler(
             NIOHTTPRequestBodySizeLimitHandler(limit: limit, overflowAction: overflowAction)
-        ).wait()
-        try channel.pipeline.syncOperations.addHandler(bodyCollector).wait()
+        )
+        try channel.pipeline.syncOperations.addHandler(bodyCollector)
         return (channel, errorCollector, bodyCollector)
     }
 

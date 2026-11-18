@@ -73,8 +73,8 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     private func makeChannel(
         limit: Int,
         overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .contentTooLarge)
-    ) throws -> (NIOEmbeddedChannel, ErrorCollector, BodyCollector) {
-        let channel = NIOEmbeddedChannel()
+    ) throws -> (EmbeddedChannel, ErrorCollector, BodyCollector) {
+        let channel = EmbeddedChannel()
         let errorCollector = ErrorCollector()
         let bodyCollector = BodyCollector()
         try channel.pipeline.addHandler(errorCollector).wait()
@@ -85,7 +85,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         return (channel, errorCollector, bodyCollector)
     }
 
-    private func readAllOutboundResponses(_ channel: NIOEmbeddedChannel) throws -> [HTTPResponsePart] {
+    private func readAllOutboundResponses(_ channel: EmbeddedChannel) throws -> [HTTPResponsePart] {
         var parts: [HTTPResponsePart] = []
         while let part: HTTPResponsePart? = try channel.readOutbound() {
             parts.append(part!)
@@ -141,7 +141,9 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(contentLength: "1")))
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
-        guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
+        guard let first = responses.first, case let .head(head) = first else {
+            return XCTFail("expected response head")
+        }
         XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertFalse(channel.isActive)
     }
@@ -155,7 +157,9 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         // The reject response must be written before any body bytes arrive.
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
-        guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
+        guard let first = responses.first, case let .head(head) = first else {
+            return XCTFail("expected response head")
+        }
         XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(head.headerFields[.connection], "close")
 
@@ -191,7 +195,9 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
 
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
-        guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
+        guard let first = responses.first, case let .head(head) = first else {
+            return XCTFail("expected response head")
+        }
         XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(head.headerFields[.contentLength], "0")
 
@@ -214,7 +220,9 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
 
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
-        guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
+        guard let first = responses.first, case let .head(head) = first else {
+            return XCTFail("expected response head")
+        }
         XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(bodyCollector.receivedBytes, 10)
     }
@@ -273,7 +281,9 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         try channel.writeInbound(HTTPRequestPart.head(makeRequest(path: "/second", contentLength: "99")))
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
-        guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
+        guard let first = responses.first, case let .head(head) = first else {
+            return XCTFail("expected response head")
+        }
         XCTAssertEqual(head.status, .contentTooLarge)
 
         // Only the first request reached the application.

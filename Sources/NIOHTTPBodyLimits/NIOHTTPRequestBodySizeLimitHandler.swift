@@ -34,7 +34,7 @@ import NIOHTTPTypes
 ///    body bytes are discarded instead of forwarded.
 ///
 /// On violation the connection is always closed. What the client sees first is
-/// configurable via ``NIOHTTPBodyLimitOverflowAction``: by default a 413 Payload
+/// configurable via ``NIOHTTPBodyLimitOverflowAction``: by default a 413 Content
 /// Too Large response is written out, so the client receives an explicit error
 /// instead of a silent connection reset.
 ///
@@ -67,8 +67,8 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
     ///   - limit: The maximum number of request body bytes, per request. A
     ///      limit of `0` rejects any request that carries a body.
     ///   - overflowAction: The action to take when the limit is exceeded.
-    ///      Defaults to responding with 413 Payload Too Large and closing.
-    public init(limit: Int, overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .payloadTooLarge)) {
+    ///      Defaults to responding with 413 Content Too Large and closing.
+    public init(limit: Int, overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .contentTooLarge)) {
         precondition(limit >= 0, "limit must be zero or positive")
         self.limit = limit
         self.overflowAction = overflowAction
@@ -84,7 +84,7 @@ public final class NIOHTTPRequestBodySizeLimitHandler: ChannelInboundHandler {
             self.receivedBodyBytes = 0
             self.didViolate = false
             self.lastMethod = request.method
-            self.lastPath = request.path
+            self.lastPath = request.path ?? ""
 
             // Header layer: reject immediately when the declared length alone
             // exceeds the limit. A missing or malformed header falls through to

@@ -19,7 +19,7 @@ import NIOHTTPTypes
 /// Describes how the `NIOHTTPRequestBodySizeLimitHandler` should react when an
 /// incoming HTTP request body exceeds the configured size limit.
 public enum NIOHTTPBodyLimitOverflowAction: Sendable, Hashable {
-    /// Respond to the client with an HTTP status code (413 Payload Too Large is
+    /// Respond to the client with an HTTP status code (413 Content Too Large is
     /// the recommended status), then close the connection.
     ///
     /// This is the default and recommended action for HTTP/1.x servers: the

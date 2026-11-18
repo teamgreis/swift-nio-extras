@@ -72,13 +72,15 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
     /// Pipeline: ErrorCollector (head side) -> limit handler -> BodyCollector (tail side).
     private func makeChannel(
         limit: Int,
-        overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .payloadTooLarge)
+        overflowAction: NIOHTTPBodyLimitOverflowAction = .respond(status: .contentTooLarge)
     ) throws -> (NIOEmbeddedChannel, ErrorCollector, BodyCollector) {
         let channel = NIOEmbeddedChannel()
         let errorCollector = ErrorCollector()
         let bodyCollector = BodyCollector()
         try channel.pipeline.addHandler(errorCollector).wait()
-        try channel.pipeline.addHandler(NIOHTTPRequestBodySizeLimitHandler(limit: limit, overflowAction: overflowAction)).wait()
+        try channel.pipeline.addHandler(
+            NIOHTTPRequestBodySizeLimitHandler(limit: limit, overflowAction: overflowAction)
+        ).wait()
         try channel.pipeline.addHandler(bodyCollector).wait()
         return (channel, errorCollector, bodyCollector)
     }
@@ -140,7 +142,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
         guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
-        XCTAssertEqual(head.status, .payloadTooLarge)
+        XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertFalse(channel.isActive)
     }
 
@@ -154,7 +156,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
         guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
-        XCTAssertEqual(head.status, .payloadTooLarge)
+        XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(head.headerFields[.connection], "close")
 
         // Nothing from the offending request is forwarded to the application.
@@ -190,7 +192,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
         guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
-        XCTAssertEqual(head.status, .payloadTooLarge)
+        XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(head.headerFields[.contentLength], "0")
 
         // Only the two in-limit frames were forwarded; the end of the rejected request was not.
@@ -213,7 +215,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
         guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
-        XCTAssertEqual(head.status, .payloadTooLarge)
+        XCTAssertEqual(head.status, .contentTooLarge)
         XCTAssertEqual(bodyCollector.receivedBytes, 10)
     }
 
@@ -272,7 +274,7 @@ final class NIOHTTPRequestBodySizeLimitHandlerTests: XCTestCase {
         let responses = try readAllOutboundResponses(channel)
         XCTAssertEqual(responses.count, 2)
         guard case .head(let head) = responses.first else { return XCTFail("expected response head") }
-        XCTAssertEqual(head.status, .payloadTooLarge)
+        XCTAssertEqual(head.status, .contentTooLarge)
 
         // Only the first request reached the application.
         XCTAssertEqual(bodyCollector.receivedBytes, 5)
